@@ -1,0 +1,3 @@
+[submodule "gnlpy"]
+	path = gnlpy
+	url = https://github.com/facebook/gnlpy.git
