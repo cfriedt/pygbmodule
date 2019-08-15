@@ -178,6 +178,7 @@ class GBOperationMessage(object):
         x._result = result
         if payload is None:
             x._payload = None
+            x._size = 8
         else:
             x._payload = payload
             x._size = 8 + len( payload )
