@@ -42,7 +42,7 @@ def setupControlHandler():
     control_hdlr = GBControlHandler( control_server_socket, manifest )
     return control_hdlr
 
-def setupGpioHandler():
+def setupGpioHandler( ngpio ):
     gpio_server_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM, 0)
     gpio_server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     print( 'created gpio server socket' )
@@ -51,7 +51,7 @@ def setupGpioHandler():
     print( 'bound gpio server to {0}'.format( gpio_server_addr ) )
     gpio_server_socket.listen(1)
     print( 'gpio server listening for incoming connections..' )
-    gpio_hdlr = GBGPIOHandler( gpio_server_socket )
+    gpio_hdlr = GBGPIOHandler( gpio_server_socket, ngpio )
     return gpio_hdlr
 
 def setupAvahiServiceAdvertisement():
@@ -85,10 +85,11 @@ def main():
     with open('manifest.mnfb', mode='rb') as f:
         manifest = f.read()
 
-    control_hdlr = setupControlHandler()    
+    control_hdlr = setupControlHandler()
     control_hdlr.start()
     
-    gpio_hdlr = setupGpioHandler()
+    ngpio = 1
+    gpio_hdlr = setupGpioHandler( ngpio )
     gpio_hdlr.start()
 
     avahi_dbus_interface = setupAvahiServiceAdvertisement()

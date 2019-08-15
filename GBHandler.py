@@ -117,7 +117,7 @@ class GBHandler(threading.Thread):
                     msg = GBOperationMessage.GBOperationMessage( hdr )
                     payload_len = msg.size() - 8
                     
-                    print('{}: message header is {}'.format(self._name, msg))
+                    #print('{}: message header is {}'.format(self._name, msg))
 
                     if payload_len < 0:
                         raise ValueError( 'impossible message size of {0}'.format( msg.size() ) )

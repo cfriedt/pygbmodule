@@ -3,6 +3,7 @@ import struct
 
 from GBOperationMessage import (
     GB_OP_SUCCESS,
+    GB_OP_RESPONSE,
     GB_VERSION_MAJOR,
     GB_VERSION_MINOR,
     GB_REQUEST_TYPE_CPORT_SHUTDOWN
@@ -33,11 +34,18 @@ GB_GPIO_IRQ_TYPE_LEVEL_LOW = 0x08
 
 class GBGPIOHandler(GBHandler):
         
-    def __init__(self, sock ):
+    def __init__(self, sock, ngpio = 1 ):
         GBHandler.__init__(self, sock, GBGPIOHandler.getHandlers())
         self._name = "GPIO"
+        self._ngpio = ngpio
+        self._gpio_data       = [0]     * ngpio
+        self._gpio_dir_input  = [True]  * ngpio
+        self._gpio_irqt       = [0]     * ngpio
+        self._gpio_mask       = [False] * ngpio
+        self._gpio_debounce   = [0]     * ngpio
         
     def identify( self, t ):
+        if GB_REQUEST_TYPE_CPORT_SHUTDOWN == t: return 'GB_REQUEST_TYPE_CPORT_SHUTDOWN' 
         if GB_GPIO_TYPE_LINE_COUNT == t:    return 'GB_GPIO_TYPE_LINE_COUNT   '
         if GB_GPIO_TYPE_ACTIVATE == t:      return 'GB_GPIO_TYPE_ACTIVATE     '
         if GB_GPIO_TYPE_DEACTIVATE == t:    return 'GB_GPIO_TYPE_DEACTIVATE   '
@@ -53,8 +61,12 @@ class GBGPIOHandler(GBHandler):
         if GB_GPIO_TYPE_IRQ_EVENT == t:     return 'GB_GPIO_TYPE_IRQ_EVENT    '
         return None
 
-    def handle_LINE_COUNT( self, msg ):
+    def handle_CPORT_SHUTDOWN(self, msg):
         return msg.response( GB_OP_SUCCESS )
+
+    def handle_LINE_COUNT( self, msg ):
+        payload = struct.pack( 'B', self._ngpio - 1 )
+        return msg.response( GB_OP_SUCCESS, payload );
  
     def handle_ACTIVATE( self, msg ):
         return msg.response( GB_OP_SUCCESS )
@@ -63,38 +75,63 @@ class GBGPIOHandler(GBHandler):
         return msg.response( GB_OP_SUCCESS )
  
     def handle_GET_DIRECTION( self, msg ):
-        return msg.response( GB_OP_SUCCESS )
+        (which,) = struct.unpack( 'B', msg.payload() )
+        payload = struct.pack( 'B', self._gpio_dir_input[ which ] )
+        return msg.response( GB_OP_SUCCESS, payload )
  
     def handle_DIRECTION_IN( self, msg ):
+        (which,) = struct.unpack( 'B', msg.payload() )
+        self._gpio_dir_input[ which ] = True
         return msg.response( GB_OP_SUCCESS )
  
     def handle_DIRECTION_OUT( self, msg ):
+        which, val = struct.unpack( 'BB', msg.payload() )
+        self._gpio_dir_input[ which ] = False
+        self._gpio_data[ which ] = val
         return msg.response( GB_OP_SUCCESS )
  
     def handle_GET_VALUE( self, msg ):
-        return msg.response( GB_OP_SUCCESS )
+        (which,) = struct.unpack( 'B', msg.payload() )
+        payload = struct.pack( 'B', self._gpio_data[ which ] )
+        return msg.response( GB_OP_SUCCESS, payload )
  
     def handle_SET_VALUE( self, msg ):
+        which, val = struct.unpack( 'BB', msg.payload() )
+        self._gpio_dir_input[ which ] = False
+        self._gpio_data[ which ] = val
         return msg.response( GB_OP_SUCCESS )
  
     def handle_SET_DEBOUNCE( self, msg ):
+        which, val = struct.unpack( '<BH', msg.payload() )
+        self._gpio_debounce[ which ] = val
         return msg.response( GB_OP_SUCCESS )
  
     def handle_IRQ_TYPE( self, msg ):
+        which, val = struct.unpack( 'BB', msg.payload() )
+        self._gpio_irqt[ which ] = val
         return msg.response( GB_OP_SUCCESS )
  
     def handle_IRQ_MASK( self, msg ):
+        (which,) = struct.unpack( 'B', msg.payload() )
+        self._gpio_mask[ which ] = True
         return msg.response( GB_OP_SUCCESS )
  
     def handle_IRQ_UNMASK( self, msg ):
+        (which,) = struct.unpack( 'B', msg.payload() )
+        self._gpio_mask[ which ] = False
         return msg.response( GB_OP_SUCCESS )
  
-    def handle_IRQ_EVENT( self, msg ):
-        return msg.response( GB_OP_SUCCESS )
+    def handle_IRQ_EVENT_resp( self, msg ):
+        if GB_OP_SUCCESS == msg.result():
+            print('{}: interrupt handled'.format( self._name ) )
+        if GB_OP_SUCCESS == msg.result():
+            print('{}: interrupt not handled'.format( self._name ) )
+        pass
 
     @staticmethod
     def getHandlers():
         hdlrs = {}
+        hdlrs[ GB_REQUEST_TYPE_CPORT_SHUTDOWN ] = GBGPIOHandler.handle_CPORT_SHUTDOWN
         hdlrs[ GB_GPIO_TYPE_LINE_COUNT ] = GBGPIOHandler.handle_LINE_COUNT
         hdlrs[ GB_GPIO_TYPE_ACTIVATE ] = GBGPIOHandler.handle_ACTIVATE
         hdlrs[ GB_GPIO_TYPE_DEACTIVATE ] = GBGPIOHandler.handle_DEACTIVATE
@@ -107,5 +144,5 @@ class GBGPIOHandler(GBHandler):
         hdlrs[ GB_GPIO_TYPE_IRQ_TYPE ] = GBGPIOHandler.handle_IRQ_TYPE
         hdlrs[ GB_GPIO_TYPE_IRQ_MASK ] = GBGPIOHandler.handle_IRQ_MASK
         hdlrs[ GB_GPIO_TYPE_IRQ_UNMASK ] = GBGPIOHandler.handle_IRQ_UNMASK
-        hdlrs[ GB_GPIO_TYPE_IRQ_EVENT ] = GBGPIOHandler.handle_IRQ_EVENT
+        hdlrs[ GB_GPIO_TYPE_IRQ_EVENT | GB_OP_RESPONSE ] = GBGPIOHandler.handle_IRQ_EVENT_resp
         return hdlrs

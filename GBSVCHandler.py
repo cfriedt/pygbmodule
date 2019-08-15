@@ -3,6 +3,7 @@ import struct
 from GBOperationMessage import (
     GBOperationMessage,
     GB_OP_SUCCESS,
+    GB_OP_PROTOCOL_BAD,
     GB_VERSION_MAJOR,
     GB_VERSION_MINOR,
     GB_REQUEST_TYPE_CPORT_SHUTDOWN
@@ -320,5 +321,5 @@ class GBSVCHandler(GBHandler):
         print( '{}: should route: {}'.format( self._name, msg ) )
         
         if not msg.isResponse():
-            resp = msg.response(GBOperationMessage.GB_OP_PROTOCOL_BAD)
+            resp = msg.response(GB_OP_PROTOCOL_BAD)
             self.send( resp )
