@@ -1,5 +1,6 @@
 import select
 import socket
+import struct
 import threading
 from gnlpy import netlink
 
@@ -20,17 +21,45 @@ GBNetlinkMessage = netlink.create_genl_message_type(
     required_modules=[],
 )
 
+###
+# Alternative 1: we use a callback and expose a sync
+# write method to communicate between the SVC and the AP
+#
+# This makes the AP communication the "odd man out" in that
+# GBSVCHandler would not be able to inherit from GBHandler
+#
+#
+#self._netlink_message_callback( cport, msg )
+
+##
+# Alternative 2: we use a socketpair to communicate between
+# the GBSVCHandler and the GBNetlinkAdapter.
+# 
+# This allows GBSVCHandler to inherit from GBHandler.
+# However, it means we must bury the destination cport
+# for a particular message inside of the GG header (in
+# the pad field). The only concern there is that if 
+# we need to pass more information than just the cport,
+# then there would not be enough pad space.
+
 class GBNetlinkAdapter(threading.Thread):
 
-    def __init__(self, netlink_message_callback):
+    #def __init__(self, netlink_message_callback):
+    def __init__(self):
 
         threading.Thread.__init__(self)
 
         self.setupNetlinkSocket()
         self._cancellation_sock = socket.socketpair()
-        self._netlink_message_callback = netlink_message_callback
+        #Alt1
+        #self._netlink_message_callback = netlink_message_callback
+        
+        #Alt2
+        self._greybus_sock = socket.socketpair()
 
         self._should_exit = False
+        
+        self._name = 'Netlink'
 
     def setupNetlinkSocket(self):
 
@@ -46,6 +75,7 @@ class GBNetlinkAdapter(threading.Thread):
         self._should_exit = True
         self._cancellation_sock[ 1 ].send( 'q' )
 
+    #Alt1
     def write(self, cport, msg):
         data = str( msg.pack() )
 
@@ -56,7 +86,7 @@ class GBNetlinkAdapter(threading.Thread):
         )
 
         self._netlink_sock_object._send( message )
-        #print('Sent netlink message to cport {}: {}'.format(cport, msg))
+        print('Sent netlink message to cport {}: {}'.format(cport, msg))
 
     def resetGreybusHostDevice(self):
         # ACK should be corrected to NOACK, same with ACK_REQUEST
@@ -74,12 +104,15 @@ class GBNetlinkAdapter(threading.Thread):
         fd_to_socket = {
             self._cancellation_sock[ 0 ].fileno(): self._cancellation_sock[ 0 ],
             self._netlink_sock.fileno(): self._netlink_sock,
+            self._greybus_sock[ 0 ].fileno(): self._greybus_sock[ 0 ],
         }
 
         READ_ONLY = select.POLLIN | select.POLLPRI | select.POLLHUP | select.POLLERR
         poller = select.poll()
         poller.register( self._cancellation_sock[ 0 ], READ_ONLY )
         poller.register( self._netlink_sock, READ_ONLY )
+        #Alt2
+        poller.register( self._greybus_sock[ 0 ], READ_ONLY)
 
         events = poller.poll( -1 )
 
@@ -98,24 +131,41 @@ class GBNetlinkAdapter(threading.Thread):
                 raise IOError( msg )
 
             if s is self._netlink_sock:
-
+                #print('{}: netlink socket has data'.format(self._name))
                 sockets_with_data.append( self._netlink_sock )
                 continue
 
+            if s is self._greybus_sock[ 0 ]:
+                #print('{}: greybus socket has data'.format(self._name))
+                sockets_with_data.append( self._greybus_sock[ 0 ] )
+                continue
+
+
         return sockets_with_data
 
-    def readBytes(self, sock, nbytes):
+    def readBytes(self, sock, n):
 
-        sockets_with_data = []
+        buf = bytearray(n)
+        view = memoryview(buf)
+        sz = 0
+        
+        while sz < n:
+                
+            sockets_with_data = []
+            
+            while sock not in sockets_with_data:
+                sockets_with_data = self.getSocketsWithData()
+                
+                k = sock.recv_into(view[sz:],n-sz)
+                sz += k
+                break
 
-        while sock not in sockets_with_data:
-            sockets_with_data = self.getSocketsWithData()
-
-        data = sock.recv( nbytes )
-
-        return data
+        return buffer( buf )
 
     def run(self):
+        
+        print( '{} thread started..'.format( self._name ) )
+        
         while not self._should_exit:
 
             try:
@@ -124,16 +174,72 @@ class GBNetlinkAdapter(threading.Thread):
 
                 if self._netlink_sock in sockets_with_data:
 
+                    #print('{}: reading from netlink socket..'.format(self._name))
+
                     nl_resp = self._netlink_sock_object._recv()[ 0 ]
                     attrs = nl_resp.get_attr_list()
                     cport = attrs.get('GB_NL_A_CPORT')
                     data = attrs.get('GB_NL_A_DATA')
                     msg = GBOperationMessage.GBOperationMessage( data )
 
-                    #print('Received netlink message for cport {}: {}'.format(cport, msg))
+                    ###
+                    # Alternative 1: we use a callback and expose a sync
+                    # write method to communicate between the SVC and the AP
+                    #
+                    # This makes the AP communication the "odd man out" in that
+                    # GBSVCHandler would not be able to inherit from GBHandler
+                    #
+                    #
+                    #self._netlink_message_callback( cport, msg )
 
-                    self._netlink_message_callback( cport, msg )
+                    ##
+                    # Alternative 2: we use a socketpair to communicate between
+                    # the GBSVCHandler and the GBNetlinkAdapter.
+                    # 
+                    # This allows GBSVCHandler to inherit from GBHandler.
+                    # However, it means we must bury the destination cport
+                    # for a particular message inside of the GG header (in
+                    # the pad field). The only concern there is that if 
+                    # we need to pass more information than just the cport,
+                    # then there would not be enough pad space.
 
-            except:
-                if self._should_exit:
-                    break;
+                    print('{}: received netlink message for cport {}: {}'.format(self._name, cport, msg))
+
+                    msg.pad( struct.pack('<H', cport) )
+                    
+                    #print('{}: buried cport {} in padding: {}'.format(self._name, cport, msg))
+                    
+                    self._greybus_sock[ 0 ].sendall( msg.pack() )
+                    print('{}: sent to fd {}: {}'.format(self._name, self._greybus_sock[ 0 ].fileno(), msg))
+                    continue
+                    
+                if self._greybus_sock[ 0 ] in sockets_with_data:
+                    
+                    # any messages coming back this way are destined for
+                    # the AP and should be using control port 0 already
+                    # so we shouldn't even need to specify that here... right?
+                    
+                    #print('{}: reading header..'.format(self._name))
+                    hdr = self.readBytes( self._greybus_sock[ 0 ], 8 )
+                    msg = GBOperationMessage.GBOperationMessage( hdr )
+                    
+                    payload_size = msg.size() - 8
+                    
+                    if payload_size > 0:
+                        #print('{}: reading {} bytes of payload..'.format(self._name, payload_size))
+                        payload = self.readBytes( self._greybus_sock[ 0 ], payload_size )
+                        msg.payload( payload )
+                    
+                    self.write( GBOperationMessage.GB_CONTROL_CPORT_ID, msg )
+                    continue
+
+            except Exception as e:
+                print('{}: Exception: {}'.format(self._name, e))
+                #if self._should_exit:
+                #    break;
+                break
+        
+        print( '{}: exiting..'.format( self._name ) )    
+    
+    def getGreybusSocket(self):
+        return self._greybus_sock[ 1 ]

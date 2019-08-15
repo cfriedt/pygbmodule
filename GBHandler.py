@@ -20,16 +20,30 @@ class GBHandler(threading.Thread):
         self._operation_id = 1
         
         self._cancellation = socket.socketpair()
+        
+        self._client_sock = -1
+        self._client_sock_is_static = False
     
-    def readBytes(self, nbytes):
+    def getSocketsWithData(self):
+        
+        sockets_with_data = []
+        
         fd_to_socket = {
-            self._client_sock.fileno(): self._client_sock,
             self._cancellation[ 0 ].fileno(): self._cancellation[ 0 ],
         }
-
+        
+        if self._client_sock != -1:
+            fd_to_socket[ self._client_sock.fileno()] = self._client_sock
+        
+        if self._server_sock != -1:
+            fd_to_socket[ self._server_sock.fileno()] = self._server_sock
+    
         READ_ONLY = select.POLLIN | select.POLLPRI | select.POLLHUP | select.POLLERR
         poller = select.poll()
-        poller.register( self._client_sock, READ_ONLY )
+        if self._server_sock != -1:            
+            poller.register( self._server_sock, READ_ONLY )
+        if self._client_sock != -1:    
+            poller.register( self._client_sock, READ_ONLY )
         poller.register( self._cancellation[ 0 ], READ_ONLY )
         
         events = poller.poll( -1 )
@@ -46,37 +60,42 @@ class GBHandler(threading.Thread):
                 msg = '{}: encountered an error on fd {}'.format( self._name, fd )
                 print( msg )
                 raise IOError( msg )
+            
+            if s is self._client_sock:
+                sockets_with_data.append( s )
 
-            hdr = self._client_sock.recv( nbytes )
-            return hdr
+            if s is self._server_sock:
+                sockets_with_data.append( s )
+        
+        return sockets_with_data
+
+    def readBytes(self, n):
+        
+        buf = bytearray(n)
+        view = memoryview(buf)
+        sz = 0
+        
+        sock = self._client_sock
+        
+        while sz < n:
+                
+            sockets_with_data = []
+            while sock not in sockets_with_data:
+                sockets_with_data = self.getSocketsWithData()
+
+            k = sock.recv_into(view[sz:],n-sz)
+            sz += k
+            break
+
+        return buffer( buf )
 
     def accept(self):
-        fd_to_socket = {
-            self._server_sock.fileno(): self._server_sock,
-            self._cancellation[ 0 ].fileno(): self._cancellation[ 0 ],
-        }
-
-        READ_ONLY = select.POLLIN | select.POLLPRI | select.POLLHUP | select.POLLERR
-        poller = select.poll()
-        poller.register( self._server_sock, READ_ONLY )
-        poller.register( self._cancellation[ 0 ], READ_ONLY )
         
-        events = poller.poll( -1 )
-        for fd, flag in events:
+        sockets_with_data = []
+        while self._server_sock not in sockets_with_data:
+            sockets_with_data = self.getSocketsWithData()
 
-            s = fd_to_socket[ fd ]
-            if s is self._cancellation[ 0 ]:
-                msg = '{}: received data on cancellation fd {}'.format( self._name, fd )
-                print( msg )
-                self._should_exit = True
-                raise IOError( msg )
-            
-            if flag & (select.POLLHUP | select.POLLERR):
-                msg = '{}: encountered an error on fd {}'.format( self._name, fd )
-                print( msg )
-                raise IOError( msg )
-
-            return self._server_sock.accept()
+        return self._server_sock.accept()
     
     
     def run(self):
@@ -85,10 +104,11 @@ class GBHandler(threading.Thread):
         
         while not self._should_exit:
 
-            try:
-                self._client_sock, self._client_addr = self.accept()
-            except:
-                break;            
+            if not self._client_sock_is_static:
+                try:
+                    self._client_sock, self._client_addr = self.accept()
+                except:
+                    break;            
 
             while True:
 
@@ -96,6 +116,8 @@ class GBHandler(threading.Thread):
                     hdr = self.readBytes( 8 )
                     msg = GBOperationMessage.GBOperationMessage( hdr )
                     payload_len = msg.size() - 8
+                    
+                    print('{}: message header is {}'.format(self._name, msg))
 
                     if payload_len < 0:
                         raise ValueError( 'impossible message size of {0}'.format( msg.size() ) )
@@ -106,9 +128,7 @@ class GBHandler(threading.Thread):
                     
                     hdlr = self._handlers[ msg.type() ]
                     if hdlr is None:
-                        if not msg.isResponse():
-                            resp = msg.response(GB_OP_PROTOCOL_BAD)
-                        print( 'unhandled message type {0}'.format( msg.type() ) )
+                        self.missingHandler( msg )
                         continue
                     
                     print( '{}: received: {} {}: {}'.format(
@@ -126,12 +146,13 @@ class GBHandler(threading.Thread):
                         resp = hdlr( self, req )
                         self.send( resp )
                 except Exception as e:
-                    print('Encountered exception {}'.format(e))
+                    print('{}: Encountered exception {}'.format(self._name, e))
+                    self._should_exit = True
                     break
             
             try:
                 self._client_sock.close()
-            except:
+            except Exception as e:
                 pass
 
         print( '{}: exiting..'.format( self._name ) )
@@ -153,3 +174,11 @@ class GBHandler(threading.Thread):
 
     def identify(self, message_type):  # @UnusedVariable
         return '????'
+    
+    # XXX: shouldn't need to do this. GBSwitch should take care of all routing
+    def missingHandler(self, msg):
+        print( '{}: unhandled message: {}'.format( self._name, msg ) )
+
+        if not msg.isResponse():
+            resp = msg.response(GB_OP_PROTOCOL_BAD)
+            self.send( resp )

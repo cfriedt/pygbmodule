@@ -6,9 +6,10 @@ from GBOperationMessage import (
     GB_VERSION_MAJOR,
     GB_VERSION_MINOR,
     GB_REQUEST_TYPE_CPORT_SHUTDOWN
-)
+, GB_OP_RESPONSE)
 
 from GBHandler import GBHandler
+from GBNetlinkAdapter import GBNetlinkAdapter
 
 GB_SVC_TYPE_PROTOCOL_VERSION = 0x01
 GB_SVC_TYPE_SVC_HELLO = 0x02
@@ -65,9 +66,11 @@ GB_SVC_PWRMON_OP_NOT_PRESENT = 0x0f
 
 class GBSVCHandler(GBHandler):
         
-    def __init__(self):
-        GBHandler.__init__(self, sock, GBSVCHandler.getHandlers())
+    def __init__(self, sock):
+        GBHandler.__init__(self, -1, GBSVCHandler.getHandlers())
         self._name = "SVC"
+        self._client_sock_is_static = True
+        self._client_sock =  sock
     
     def identify(self, t):
         if GB_REQUEST_TYPE_CPORT_SHUTDOWN == t:         return 'GB_REQUEST_TYPE_CPORT_SHUTDOWN        '
@@ -108,6 +111,12 @@ class GBSVCHandler(GBHandler):
         if GB_SVC_TYPE_INTF_OOPS == t:                  return 'GB_SVC_TYPE_INTF_OOPS                 '
         return None
 
+    def connectToAP(self):
+        self.PROTOCOL_VERSION()
+
+    def handler_CPORT_SHUTDOWN(self, req):
+        return req.response( GB_OP_SUCCESS )
+
     def PROTOCOL_VERSION(self):
         operation_id = self._operation_id
         self._operation_id = self._operation_id + 1
@@ -116,7 +125,7 @@ class GBSVCHandler(GBHandler):
         minor = GB_VERSION_MINOR
         payload = struct.pack( 'BB', major, minor )
         
-        protocol_version_msg = GBOperationMessage( ( operation_id, GB_SVC_TYPE_PROTOCOL_VERSION, 0, payload ) )
+        protocol_version_msg = GBOperationMessage( ( operation_id, GB_SVC_TYPE_PROTOCOL_VERSION, payload ) )
         
         self.send( protocol_version_msg )
 
@@ -128,13 +137,15 @@ class GBSVCHandler(GBHandler):
             raise IOError( 'AP response to PROTOCOL_VERION was {}'.format( result ) )
 
         payload = resp.payload()
-        major = payload[ 0 ]
-        minor = payload[ 1 ]
+        major = ord( payload[ 0 ] )
+        minor = ord( payload[ 1 ] )
         
         if not( GB_VERSION_MAJOR == major and GB_VERSION_MINOR == minor ):
-            raise IOError( 'unexpected AP response to PROTOCOL_VERION: {}.{}'.format( major, minor ) )
+            raise IOError( 'unexpected AP response to PROTOCOL_VERSION: {}.{}'.format( major, minor ) )
         
         print( 'AP PROTOCOL_VERION: {}.{}'.format( major, minor ) )
+
+        self.SVC_HELLO()
 
     def SVC_HELLO(self):
 
@@ -149,7 +160,7 @@ class GBSVCHandler(GBHandler):
         
         payload = struct.pack( '<HB', endo_id, interface_id )
         
-        svc_hello_msg = GBOperationMessage( ( operation_id, GB_SVC_TYPE_SVC_HELLO, 0, payload ) )
+        svc_hello_msg = GBOperationMessage( ( operation_id, GB_SVC_TYPE_SVC_HELLO, payload ) )
         
         self.send( svc_hello_msg )
 
@@ -204,8 +215,10 @@ class GBSVCHandler(GBHandler):
     def handler_PING( self, req ):
         return req.response( GB_OP_SUCCESS )
     
-    def handler_PWRMON_RAIL_COUNT_GET( self, req ):
-        return req.response( GB_OP_SUCCESS )
+    def handler_PWRMON_RAIL_COUNT_GET( self, req ):        
+        payload = struct.pack( 'B', 1 )
+        resp = req.response( GB_OP_SUCCESS, payload )
+        return resp
     
     def handler_PWRMON_RAIL_NAMES_GET( self, req ):
         return req.response( GB_OP_SUCCESS )
@@ -265,8 +278,8 @@ class GBSVCHandler(GBHandler):
     def getHandlers():
         hdlrs = {}
         hdlrs[ GB_REQUEST_TYPE_CPORT_SHUTDOWN ] = GBSVCHandler.handler_CPORT_SHUTDOWN
-        hdlrs[ GB_SVC_TYPE_PROTOCOL_VERSION ] = GBSVCHandler.handler_PROTOCOL_VERSION_response
-        hdlrs[ GB_SVC_TYPE_SVC_HELLO ] = GBSVCHandler.handler_SVC_HELLO
+        hdlrs[ GB_SVC_TYPE_PROTOCOL_VERSION | GB_OP_RESPONSE] = GBSVCHandler.handler_PROTOCOL_VERSION
+        hdlrs[ GB_SVC_TYPE_SVC_HELLO | GB_OP_RESPONSE] = GBSVCHandler.handler_SVC_HELLO
         hdlrs[ GB_SVC_TYPE_INTF_DEVICE_ID ] = GBSVCHandler.handler_INTF_DEVICE_ID
         hdlrs[ GB_SVC_TYPE_INTF_RESET ] = GBSVCHandler.handler_INTF_RESET
         hdlrs[ GB_SVC_TYPE_CONN_CREATE ] = GBSVCHandler.handler_CONN_CREATE
@@ -301,3 +314,11 @@ class GBSVCHandler(GBHandler):
         hdlrs[ GB_SVC_TYPE_INTF_MAILBOX_EVENT ] = GBSVCHandler.handler_INTF_MAILBOX_EVENT
         hdlrs[ GB_SVC_TYPE_INTF_OOPS ] = GBSVCHandler.handler_INTF_OOPS
         return hdlrs
+
+    # XXX: shouldn't need to do this. GBSwitch should take care of all routing
+    def missingHandler(self, msg):
+        print( '{}: should route: {}'.format( self._name, msg ) )
+        
+        if not msg.isResponse():
+            resp = msg.response(GBOperationMessage.GB_OP_PROTOCOL_BAD)
+            self.send( resp )

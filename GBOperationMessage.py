@@ -1,4 +1,5 @@
 import struct
+from __builtin__ import isinstance
 
 GB_SVC_DEVICE_ID_SVC = 0
 GB_SVC_DEVICE_ID_AP = 1
@@ -44,6 +45,7 @@ class GBOperationMessage(object):
                 self._operation_id = data[ 0 ]
                 self._type = data[ 1 ]
                 self._result = 0
+                self._pad = ( 0, 0 )
                 self._payload = None
                 self._size = 8
                 return
@@ -53,6 +55,7 @@ class GBOperationMessage(object):
                 self._operation_id = data[ 0 ]
                 self._type = data[ 1 ]
                 self._result = 0
+                self._pad = ( 0, 0 )
                 self._payload = data[ 2 ]
                 self._size = 8 + len( self._payload )
                 return
@@ -62,6 +65,7 @@ class GBOperationMessage(object):
                 self._operation_id = data[ 0 ]
                 self._type = data[ 1 ] | GB_OP_RESPONSE
                 self._result = data[ 2 ]
+                self._pad = ( 0, 0 )
                 self._payload = data[ 3 ]
                 self._size = 8 + len( self._payload )
                 return
@@ -69,11 +73,16 @@ class GBOperationMessage(object):
             raise ValueError( 'unsupported tuple length {0}'.format( len( data ) ) )
 
         if isinstance( data, buffer ):
-            x = struct.unpack( '<HHBBxx', data[0:8] )
+            
+            if len( data ) < 8:
+                raise ValueError('unsupported buffer length {}'.format( len( data ) ))
+            
+            x = struct.unpack( '<HHBBBB', data[0:8] )
             self._size = x[ 0 ]
             self._operation_id = x[ 1 ]
             self._type = x[ 2 ]
             self._result = x[ 3 ]
+            self._pad = (x[ 4 ], x[ 5 ])
             self._payload = None
 
             if len( data ) > 8:
@@ -88,7 +97,17 @@ class GBOperationMessage(object):
 
     def __str__(self):
         s = ''
-        x = bytearray( struct.pack( '<HHBBxx', self._size, self._operation_id, self._type, self._result) )
+        x = bytearray(
+            struct.pack(
+                '<HHBBBB',
+                self._size,
+                self._operation_id,
+                self._type,
+                self._result,
+                self._pad[ 0 ],
+                self._pad[ 1 ]
+            )
+        )
         for xx in x:
             s += "{0:0{1}x}".format( xx, 2 )
             s += ' '
@@ -113,6 +132,26 @@ class GBOperationMessage(object):
 
     def result(self):
         return self._result
+    
+    def pad(self, data = None):
+        if data is None:
+            return self._pad
+
+        if len( data ) is 0:
+            self._pad = (0,0)
+            return
+        
+        if len( data ) is not 2:
+            raise ValueError( 'data length must be 2' )
+        
+        if isinstance( data, str ):
+            data = ( ord( data[ 0 ] ), ord( data[ 1 ] ) )
+
+        if isinstance( data, tuple ):
+            self._pad = data
+            return
+            
+        raise TypeError( 'unsupported type {}'.format( type( data ) ) )
 
     def payload(self, data = None):
         if data is None:
@@ -124,7 +163,7 @@ class GBOperationMessage(object):
         return True if ( GB_OP_RESPONSE & self._type ) else False
 
     def pack(self):
-        hdr = str( struct.pack( '<HHBBxx', self._size, self._operation_id, self._type, self._result) )
+        hdr = str( struct.pack( '<HHBBBB', self._size, self._operation_id, self._type, self._result, self._pad[ 0 ], self._pad[ 1 ]) )
         pl = str( self._payload )
         msg = hdr + pl
         return buffer( msg )
