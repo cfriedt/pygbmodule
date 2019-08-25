@@ -3,7 +3,7 @@ import socket
 import threading
 
 import GBOperationMessage
-from __builtin__ import True
+import GBPKAuthHandler
 from GBOperationMessage import GB_OP_RESPONSE, GB_OP_PROTOCOL_BAD
 
 class GBHandler(threading.Thread):
@@ -97,7 +97,6 @@ class GBHandler(threading.Thread):
 
         return self._server_sock.accept()
     
-    
     def run(self):
         
         print( '{} thread started..'.format( self._name ) )
@@ -107,8 +106,20 @@ class GBHandler(threading.Thread):
             if not self._client_sock_is_static:
                 try:
                     self._client_sock, self._client_addr = self.accept()
-                except:
-                    break;            
+
+
+                    id_rsa_path = '/home/cfriedt/.ssh/id_rsa'
+                    authorized_keys_path = '/home/cfriedt/Desktop/authorized_keys'
+                    pkauth = GBPKAuthHandler.GBPKAuthHandler(self._client_sock, id_rsa_path, authorized_keys_path)
+
+                    pkauth.auth()
+
+
+                except Exception as e:
+                    print('{}: caught exception: {}'.format(self._name, e))
+                    self._client_sock = None
+                    self._client_addr = None
+                    break
 
             while True:
 
