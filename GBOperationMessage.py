@@ -57,6 +57,8 @@ class GBOperationMessage(object):
                 self._result = 0
                 self._pad = ( 0, 0 )
                 self._payload = data[ 2 ]
+                if not isinstance( self._payload, buffer ) and self._payload is not None:
+                    self._payload = buffer( self._payload )
                 self._size = 8 + len( self._payload )
                 return
 
@@ -67,6 +69,8 @@ class GBOperationMessage(object):
                 self._result = data[ 2 ]
                 self._pad = ( 0, 0 )
                 self._payload = data[ 3 ]
+                if not isinstance( self._payload, buffer ) and self._payload is not None:
+                    self._payload = buffer( self._payload )
                 self._size = 8 + len( self._payload )
                 return
 
@@ -148,7 +152,7 @@ class GBOperationMessage(object):
             data = ( ord( data[ 0 ] ), ord( data[ 1 ] ) )
 
         if isinstance( data, tuple ):
-            self._pad = data
+            self._pad = data[:2]
             return
             
         raise TypeError( 'unsupported type {}'.format( type( data ) ) )
@@ -156,6 +160,8 @@ class GBOperationMessage(object):
     def payload(self, data = None):
         if data is None:
             return self._payload
+        if not isinstance( data, buffer ):
+            data = buffer( data )
         self._payload = data
         self._size = 8 + len( data )
 
@@ -163,10 +169,12 @@ class GBOperationMessage(object):
         return True if ( GB_OP_RESPONSE & self._type ) else False
 
     def pack(self):
-        hdr = str( struct.pack( '<HHBBBB', self._size, self._operation_id, self._type, self._result, self._pad[ 0 ], self._pad[ 1 ]) )
-        pl = str( self._payload )
-        msg = hdr + pl
-        return buffer( msg )
+        hdr = buffer(struct.pack( '<HHBBBB', self._size, self._operation_id, self._type, self._result, self._pad[ 0 ], self._pad[ 1 ]))
+        if self._payload is not None:
+            msg = hdr + self._payload
+        else:
+            msg = hdr
+        return msg
 
     def response(self, result, payload = None ):
 
@@ -180,6 +188,8 @@ class GBOperationMessage(object):
             x._payload = None
             x._size = 8
         else:
+            if not isinstance( payload, buffer ):
+                payload = buffer( payload )
             x._payload = payload
             x._size = 8 + len( payload )
 

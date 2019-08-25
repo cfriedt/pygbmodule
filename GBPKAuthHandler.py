@@ -26,6 +26,9 @@ GB_PKAUTH_VERSION_MINOR = 0x01
 GB_PKAUTH_PUBKEY_RESULT_SUCCESS = 0x00
 GB_PKAUTH_PUBKEY_RESULT_NOAUTH  = 0x01
 
+GB_PKAUTH_CHALLENGE_RESULT_SUCCESS = 0x00
+GB_PKAUTH_CHALLENGE_RESULT_NOAUTH  = 0x01
+
 class GBPKAuthHandler(object):
         
     def __init__(self, sock, id_rsa_path, authorized_keys_path):
@@ -145,7 +148,7 @@ class GBPKAuthHandler(object):
     def handle_PUBKEY(self):
         msg = self.getMessage( GB_PKAUTH_TYPE_PUBKEY )
         pubkey = str(msg.payload()).strip()
-        self._device_cipher = PKCS1_OAEP.new( RSA.importKey( pubkey, passphrase = None ) )
+        self._friend_cipher = PKCS1_OAEP.new( RSA.importKey( pubkey, passphrase = None ) )
         result = GB_PKAUTH_PUBKEY_RESULT_NOAUTH
         if pubkey in self._authorized_keys:
             result = GB_PKAUTH_PUBKEY_RESULT_SUCCESS
@@ -153,30 +156,55 @@ class GBPKAuthHandler(object):
         self.send( msg.response( GB_OP_SUCCESS, payload ) )
  
     def CHALLENGE(self):
-        clear_text_len = random.randint(200,300)
-        clear_text = os.urandom( clear_text_len )
-        cipher_text = self._device_cipher.encrypt( clear_text )
-        payload = buffer( cipher_text )
+        plaintext_len = random.randint(200,300)
+        plaintext = os.urandom( plaintext_len )
+        ciphertext = self._friend_cipher.encrypt( plaintext )
+        
+        print('{}: ciphertext has length {}'.format(self._name, len(ciphertext)))
+        
+        payload = buffer( ciphertext )
         req = GBOperationMessage.GBOperationMessage((self.getOperationId(), GB_PKAUTH_TYPE_CHALLENGE, payload))
         self.send(req)
         resp = self.getMessage(GB_PKAUTH_TYPE_CHALLENGE | GB_OP_RESPONSE)
-        if resp.status() != GB_OP_SUCCESS:
+        if resp.result() != GB_OP_SUCCESS:
             raise ValueError( 'unexpected status {}'.format( resp.status() ) )
+        
+        req = self.getMessage( GB_PKAUTH_TYPE_CHALLENGE_RESP )
+        ciphertext = str(req.payload())
+        plaintext2 = self._cipher.decrypt(ciphertext)
+        
+        result = GB_PKAUTH_CHALLENGE_RESULT_NOAUTH
+        if plaintext2 == plaintext:
+            result = GB_PKAUTH_CHALLENGE_RESULT_SUCCESS
+        
+        payload = struct.pack('B', result)
+        resp = req.response(GB_OP_SUCCESS, payload)
+        self.send(resp)
 
     def handle_CHALLENGE(self):
-        msg = self.getMessage( GB_PKAUTH_TYPE_CHALLENGE )
-        self.send(msg.response(GB_OP_SUCCESS))
-
-    def handle_CHALLENGE_RESP( self, msg ):
-        return msg.response( GB_OP_SUCCESS )
+        req = self.getMessage( GB_PKAUTH_TYPE_CHALLENGE )
+        
+        ciphertext = req.payload()
+        
+        print('{}: ciphertext has length {}'.format(self._name, len(ciphertext)))
+        
+        resp = req.response(GB_OP_SUCCESS)
+        self.send(resp)
+        
+        plaintext = self._cipher.decrypt( str(ciphertext) )
+        ciphertext = self._friend_cipher.encrypt( plaintext )
+        
+        req = GBOperationMessage.GBOperationMessage((self.getOperationId(), GB_PKAUTH_TYPE_CHALLENGE_RESP, buffer(ciphertext)))
+        self.send(req)
+        resp = self.getMessage(GB_PKAUTH_TYPE_CHALLENGE_RESP | GB_OP_RESPONSE)
+        if resp.result() != GB_PKAUTH_CHALLENGE_RESULT_SUCCESS:
+            raise ValueError('CHALLENGE_RESP failed')
     
     def auth(self):
         self.VERSION()
         self.PUBKEY()
         self.handle_PUBKEY()
         self.CHALLENGE()
-        self.handle_CHALLENGE_RESP()
         self.handle_CHALLENGE()
-        self.CHALLENGE_RESP()
 
         
