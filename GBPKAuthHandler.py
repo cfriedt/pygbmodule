@@ -7,18 +7,16 @@ import struct
 
 from GBOperationMessage import (
     GB_OP_SUCCESS,
-    GB_OP_RESPONSE,
-    GB_VERSION_MAJOR,
-    GB_VERSION_MINOR,
+    GB_OP_RESPONSE
 )
 
 import GBOperationMessage
-from pip.utils import outdated
 
-GB_PKAUTH_TYPE_VERSION = 0x7b
-GB_PKAUTH_TYPE_PUBKEY = 0x7c
-GB_PKAUTH_TYPE_CHALLENGE = 0x7d
-GB_PKAUTH_TYPE_CHALLENGE_RESP = 0x7e
+GB_PKAUTH_TYPE_VERSION = 0x7a
+GB_PKAUTH_TYPE_PUBKEY = 0x7b
+GB_PKAUTH_TYPE_CHALLENGE = 0x7c
+GB_PKAUTH_TYPE_CHALLENGE_RESP = 0x7d
+GB_PKAUTH_TYPE_SESSION_KEY = 0x7e
 
 GB_PKAUTH_VERSION_MAJOR = 0x00
 GB_PKAUTH_VERSION_MINOR = 0x01
@@ -124,6 +122,7 @@ class GBPKAuthHandler(object):
         if GB_PKAUTH_TYPE_PUBKEY == t:         return 'GB_PKAUTH_TYPE_PUBKEY        '
         if GB_PKAUTH_TYPE_CHALLENGE == t:      return 'GB_PKAUTH_TYPE_CHALLENGE     '
         if GB_PKAUTH_TYPE_CHALLENGE_RESP == t: return 'GB_PKAUTH_TYPE_CHALLENGE_RESP'
+        if GB_PKAUTH_TYPE_SESSION_KEY == t:    return 'GB_PKAUTH_TYPE_SESSION_KEY   '
         return None
 
     def VERSION(self):
@@ -160,8 +159,6 @@ class GBPKAuthHandler(object):
         plaintext = os.urandom( plaintext_len )
         ciphertext = self._friend_cipher.encrypt( plaintext )
         
-        print('{}: ciphertext has length {}'.format(self._name, len(ciphertext)))
-        
         payload = buffer( ciphertext )
         req = GBOperationMessage.GBOperationMessage((self.getOperationId(), GB_PKAUTH_TYPE_CHALLENGE, payload))
         self.send(req)
@@ -186,8 +183,6 @@ class GBPKAuthHandler(object):
         
         ciphertext = req.payload()
         
-        print('{}: ciphertext has length {}'.format(self._name, len(ciphertext)))
-        
         resp = req.response(GB_OP_SUCCESS)
         self.send(resp)
         
@@ -200,11 +195,23 @@ class GBPKAuthHandler(object):
         if resp.result() != GB_PKAUTH_CHALLENGE_RESULT_SUCCESS:
             raise ValueError('CHALLENGE_RESP failed')
     
+    def handle_SESSION_KEY(self):
+        req = self.getMessage( GB_PKAUTH_TYPE_SESSION_KEY )
+        
+        ciphertext = req.payload()
+        
+        plaintext = self._cipher.decrypt( str(ciphertext) )
+        
+        resp = req.response(GB_OP_SUCCESS)
+        self.send(resp)
+        
+        session_key = plaintext
+        return session_key
+    
     def auth(self):
         self.VERSION()
         self.PUBKEY()
         self.handle_PUBKEY()
         self.CHALLENGE()
         self.handle_CHALLENGE()
-
-        
+        return self.handle_SESSION_KEY()
