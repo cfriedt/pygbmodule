@@ -1,5 +1,4 @@
 import struct
-from __builtin__ import isinstance
 
 GB_SVC_DEVICE_ID_SVC = 0
 GB_SVC_DEVICE_ID_AP = 1
