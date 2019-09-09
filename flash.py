@@ -46,7 +46,7 @@ def main(argv):
 
     if len(argv) != 3:
         usage(os.path.basename(argv[0]))
-	return 0
+        return 0
 
     with serial.Serial(argv[1], 115200, timeout=0.1) as ser:
         print('using ser {}'.format(ser))
