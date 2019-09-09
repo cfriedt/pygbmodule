@@ -1,9 +1,13 @@
+import os
 import select
 import socket
 import threading
 
+from Crypto import Random
+from Crypto.Cipher import AES
+
 import GBOperationMessage
-from __builtin__ import True
+import GBPKAuthHandler
 from GBOperationMessage import GB_OP_RESPONSE, GB_OP_PROTOCOL_BAD
 
 class GBHandler(threading.Thread):
@@ -97,7 +101,6 @@ class GBHandler(threading.Thread):
 
         return self._server_sock.accept()
     
-    
     def run(self):
         
         print( '{} thread started..'.format( self._name ) )
@@ -107,37 +110,29 @@ class GBHandler(threading.Thread):
             if not self._client_sock_is_static:
                 try:
                     self._client_sock, self._client_addr = self.accept()
-                except:
-                    break;            
+
+                    id_rsa_path = os.environ['HOME'] + '/.ssh/id_rsa'
+                    authorized_keys_path = os.environ['HOME'] + '/Desktop/authorized_keys'
+                    pkauth = GBPKAuthHandler.GBPKAuthHandler(self._client_sock, id_rsa_path, authorized_keys_path)
+
+                    self._session_key = pkauth.auth()
+
+                except Exception as e:
+                    print('{}: caught exception: {}'.format(self._name, e))
+                    self._client_sock = None
+                    self._client_addr = None
+                    break
 
             while True:
 
                 try:
-                    hdr = self.readBytes( 8 )
-                    msg = GBOperationMessage.GBOperationMessage( hdr )
-                    payload_len = msg.size() - 8
-                    
-                    #print('{}: message header is {}'.format(self._name, msg))
+                    msg = self.getMessage()
 
-                    if payload_len < 0:
-                        raise ValueError( 'impossible message size of {0}'.format( msg.size() ) )
-    
-                    if payload_len > 0:                        
-                        payload = buffer( self.readBytes( payload_len ) )
-                        msg.payload( payload )
-                    
                     hdlr = self._handlers[ msg.type() ]
                     if hdlr is None:
                         self.missingHandler( msg )
                         continue
                     
-                    print( '{}: received: {} {}: {}'.format(
-                        self._name,
-                        'resp' if msg.isResponse() else 'req ',
-                        self.identify( msg.type() & ~GB_OP_RESPONSE ),
-                        msg
-                    ))
-
                     if msg.isResponse():
                         resp = msg
                         hdlr( self, resp )
@@ -156,10 +151,14 @@ class GBHandler(threading.Thread):
                 pass
 
         print( '{}: exiting..'.format( self._name ) )
-    
+
     def send(self, msg):
 
-        self._client_sock.send( msg.pack() )
+        plaintext = str(msg.pack())
+
+        ciphertext = self.encrypt( plaintext )
+
+        self._client_sock.send( ciphertext )
         
         print( '{}: sent    : {} {}: {}'.format(
             self._name,
@@ -167,6 +166,49 @@ class GBHandler(threading.Thread):
             self.identify( msg.type() & ~GB_OP_RESPONSE ),
             msg
         ))
+    
+    def encrypt(self, plaintext):
+        pad = lambda s: s + (AES.block_size - len(s) % AES.block_size) * chr(AES.block_size - len(s) % AES.block_size) 
+        plaintext = pad( plaintext )
+        iv = Random.new().read( AES.block_size )
+        cipher = AES.new( self._session_key, AES.MODE_CBC, iv )
+        ciphertext = iv + cipher.encrypt(plaintext)
+        return ciphertext
+    
+    def getMessage(self):
+
+        iv = self.readBytes( AES.block_size )
+        ciphertext = self.readBytes( AES.block_size )
+        decipher = AES.new( self._session_key, AES.MODE_CBC, iv )
+        plaintext = decipher.decrypt(ciphertext)
+        
+        hdr = plaintext[:8]
+        msg = GBOperationMessage.GBOperationMessage( hdr )
+        payload_len = msg.size() - 8
+        
+        nblocks = msg.size() // AES.block_size
+        nblocks += 0 if (msg.size() % AES.block_size) == 0 else 1
+        
+        if nblocks > 1:
+            ciphertext = self.readBytes( nblocks * AES.block_size )
+            plaintext += decipher.decrypt( ciphertext )
+
+        plaintext = plaintext[:msg.size()]
+
+        if payload_len > 0:        
+            payload = plaintext[8:msg.size()]
+            msg.payload(payload)
+        else:
+            payload = None
+        
+        print( '{}: received: {} {}: {}'.format(
+            self._name,
+            'resp' if msg.isResponse() else 'req ',
+            self.identify( msg.type() ),
+            msg
+        ))
+        
+        return msg
     
     def stop(self):
         self._should_exit = True
